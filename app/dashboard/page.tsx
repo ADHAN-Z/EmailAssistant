@@ -4,7 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../api/auth/[...nextauth]/route";
 import { PrismaClient } from "@prisma/client";
+import type { Task } from "@prisma/client";
 import { TaskCard } from "@/components/dashboard/TaskCard"; 
+import { InterviewCard } from '@/components/interview/InterviewCard';
+import { TaskKanban } from '@/components/dashboard/TaskKanban';
 
 const prisma = new PrismaClient();
 
@@ -20,6 +23,11 @@ export default async function DashboardPage() {
       priority: 'desc', // Show highest priority tasks first
     },
   });
+
+    // Filter tasks into two groups
+  const interviewTasks = tasks.filter((task: Task) => task.taskType === 'interview');
+  const regularTasks = tasks.filter((task: Task) => task.taskType !== 'interview');
+
 
   return (
     <div className="min-h-screen bg-black text-white p-8">
@@ -75,7 +83,7 @@ export default async function DashboardPage() {
           {/* Placeholder for tasks list */}
           <div className="bg-[#1C1C1C] p-6 rounded-lg">
           {tasks.length > 0 ? (
-              tasks.map((task) => <TaskCard key={task.id} task={task} />)
+              tasks.map((task: Task) => <TaskCard key={task.id} task={task} />)
             ) : (
               <p className="text-center text-gray-500 py-8">
                 No tasks found. Try syncing your emails!
@@ -87,7 +95,13 @@ export default async function DashboardPage() {
           <h2 className="text-xl font-semibold mb-4">Interview Prep</h2>
           {/* Placeholder for interviews */}
           <div className="bg-[#1C1C1C] p-6 rounded-lg">
-            <p>Interview prep cards will go here...</p>
+          {interviewTasks.length > 0 ? (
+              interviewTasks.map((task: Task) => <InterviewCard key={task.id} task={task} />)
+            ) : (
+              <p className="text-center text-gray-500">
+                Interviews from your emails will appear here.
+              </p>
+            )}
           </div>
         </div>
       </main>
