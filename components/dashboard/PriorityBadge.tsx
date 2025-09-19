@@ -1,14 +1,41 @@
+// components/dashboard/PriorityBadge.tsx
 import { Badge } from "@/components/ui/badge";
 
-export function PriorityBadge({ priority }: { priority: number }) {
-  if (priority > 7) {
-    return <Badge variant="destructive">Urgent</Badge>;
-  }
-  if (priority > 4) {
-    return <Badge className="bg-yellow-500 text-black hover:bg-yellow-600">High</Badge>;
-  }
-  if (priority > 2) {
-    return <Badge className="bg-blue-500 hover:bg-blue-600">Medium</Badge>;
-  }
-  return <Badge variant="secondary">Low</Badge>;
+interface PriorityBadgeProps {
+  priority: number;
+}
+
+export function PriorityBadge({ priority }: PriorityBadgeProps) {
+  const getPriorityConfig = (priority: number) => {
+    switch (priority) {
+      case 4:
+        return {
+          label: 'Urgent',
+          className: 'bg-red-500/20 text-red-400 border-red-500/30'
+        };
+      case 3:
+        return {
+          label: 'High',
+          className: 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+        };
+      case 2:
+        return {
+          label: 'Medium',
+          className: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+        };
+      default:
+        return {
+          label: 'Low',
+          className: 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+        };
+    }
+  };
+
+  const config = getPriorityConfig(priority);
+
+  return (
+    <Badge variant="outline" className={`text-xs ${config.className}`}>
+      {config.label}
+    </Badge>
+  );
 }

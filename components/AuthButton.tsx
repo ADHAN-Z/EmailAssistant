@@ -1,19 +1,43 @@
 'use client';
 
 import { signIn, signOut, useSession } from 'next-auth/react';
-import { Button } from './ui/button'; 
+import { Button } from './ui/button';
+import { ReactNode } from 'react';
 
-export default function AuthButton() {
+interface AuthButtonProps {
+  children?: ReactNode;
+  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  size?: "default" | "sm" | "lg" | "icon";
+  className?: string;
+}
+
+export default function AuthButton({ 
+  children, 
+  variant = "default", 
+  size = "default",
+  className 
+}: AuthButtonProps) {
   const { data: session } = useSession();
 
   if (session) {
     return (
       <div className="flex items-center gap-4">
-        <p>{session.user?.email}</p>
-        <Button onClick={() => signOut()}>Sign Out</Button>
+        <p className="text-sm text-muted-foreground">{session.user?.email}</p>
+        <Button variant="outline" size={size} onClick={() => signOut()}>
+          Sign Out
+        </Button>
       </div>
     );
   }
 
-  return <Button onClick={() => signIn('google')}>Sign in with Google</Button>;
+  return (
+    <Button 
+      variant={variant} 
+      size={size} 
+      className={className}
+      onClick={() => signIn('google')}
+    >
+      {children || 'Sign in with Google'}
+    </Button>
+  );
 }
