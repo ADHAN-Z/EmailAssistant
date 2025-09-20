@@ -4,15 +4,24 @@ import GoogleProvider from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import type { JWT } from "next-auth/jwt";
 
-async function refreshAccessToken(token: any) {
+// Extend JWT to include Google tokens
+interface GoogleJWT extends JWT {
+  accessToken?: string;
+  refreshToken?: string;
+  accessTokenExpires?: number;
+  error?: string;
+}
+
+async function refreshAccessToken(token: GoogleJWT): Promise<GoogleJWT> {
   try {
     const url = "https://oauth2.googleapis.com/token";
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
       grant_type: "refresh_token",
-      refresh_token: token.refreshToken,
+      refresh_token: token.refreshToken!,
     });
 
     const response = await fetch(url, {
@@ -20,7 +29,11 @@ async function refreshAccessToken(token: any) {
       body: params,
     });
 
-    const refreshedTokens = await response.json();
+    const refreshedTokens: {
+      access_token: string;
+      expires_in: number;
+      refresh_token?: string;
+    } = await response.json();
 
     if (!response.ok) throw refreshedTokens;
 
@@ -30,7 +43,7 @@ async function refreshAccessToken(token: any) {
       accessTokenExpires: Date.now() + refreshedTokens.expires_in * 1000,
       refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
     };
-  } catch (error : unknown) {
+  } catch (error: unknown) {
     logger.error("Error refreshing access token", error as Error);
     return { ...token, error: "RefreshAccessTokenError" };
   }
@@ -55,50 +68,55 @@ export const authOptions: NextAuthOptions = {
           ].join(" "),
         },
       },
-      httpOptions: {
-        timeout: 10000,
-      },
+      httpOptions: { timeout: 10000 },
     }),
   ],
   session: { strategy: "jwt" },
   callbacks: {
     async jwt({ token, account }) {
+      const customToken = token as GoogleJWT;
+
       if (account) {
         logger.info("Account object received from Google", account);
-        token.accessToken = account.access_token;
-        token.refreshToken = account.refresh_token;
-        token.accessTokenExpires = account.expires_at
+        customToken.accessToken = account.access_token;
+        customToken.refreshToken = account.refresh_token;
+        customToken.accessTokenExpires = account.expires_at
           ? account.expires_at * 1000
           : Date.now() + 3600 * 1000;
-        logger.info("OAuth tokens persisted", { provider: account.provider, userId: token.sub });
-        logger.info("JWT after initial login", {
-          accessToken: token.accessToken,
-          refreshToken: token.refreshToken,
-          expiresAt: token.accessTokenExpires,
+        logger.info("OAuth tokens persisted", {
+          provider: account.provider,
+          userId: token.sub,
         });
       }
 
       // Refresh token if expired
-      if (Date.now() > (token.accessTokenExpires || 0)) {
-        return await refreshAccessToken(token);
+      if (Date.now() > (customToken.accessTokenExpires || 0)) {
+        return await refreshAccessToken(customToken);
       }
 
-      return token;
+      return customToken;
     },
 
     async session({ session, token }) {
+      const customToken = token as GoogleJWT;
       if (session.user) {
         session.user.id = token.sub!;
-        session.accessToken = token.accessToken;
-        session.refreshToken = token.refreshToken as string;
+        session.accessToken = customToken.accessToken;
+        session.refreshToken = customToken.refreshToken ?? "";
       }
-      logger.info("Session created", { userId: token.sub, email: session.user?.email });
+      logger.info("Session created", {
+        userId: token.sub,
+        email: session.user?.email,
+      });
       return session;
     },
 
     async signIn({ user, account }) {
       try {
-        logger.info("User sign in attempt", { email: user.email, provider: account?.provider });
+        logger.info("User sign in attempt", {
+          email: user.email,
+          provider: account?.provider,
+        });
         return true;
       } catch (error) {
         logger.error("Sign in error", error as Error, { email: user.email });
@@ -112,10 +130,17 @@ export const authOptions: NextAuthOptions = {
   },
   events: {
     async signIn({ user, account, isNewUser }) {
-      logger.info("User signed in", { email: user.email, isNewUser, provider: account?.provider });
+      logger.info("User signed in", {
+        email: user.email,
+        isNewUser,
+        provider: account?.provider,
+      });
     },
     async signOut({ session, token }) {
-      logger.info("User signed out", { userId: token?.sub, email: session?.user?.email });
+      logger.info("User signed out", {
+        userId: token?.sub,
+        email: session?.user?.email,
+      });
     },
   },
   secret: process.env.NEXTAUTH_SECRET,

@@ -2,8 +2,7 @@
 'use client';
 import { useState } from 'react';
 import SyncButton, { EmailSyncResult } from '@/components/SyncButton';
-import { Button } from '@/components/ui/button';
-import { Mail } from 'lucide-react';
+
 
 type Stats = {
   todaysTasks: number;

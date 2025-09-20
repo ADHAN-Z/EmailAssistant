@@ -140,7 +140,7 @@ export default function MainPage() {
             <span className="bg-gradient-to-r from-primary to-interview-technical bg-clip-text text-transparent"> Work For You</span>
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Our AI doesn't just organize—it understands context, prioritizes intelligently, and helps you succeed.
+            Our AI doesn&apos;t just organize—it understands context, prioritizes intelligently, and helps you succeed.
           </p>
         </div>
 
@@ -247,7 +247,7 @@ export default function MainPage() {
             <span className="bg-gradient-to-r from-primary to-interview-technical bg-clip-text text-transparent"> Productivity?</span>
           </h2>
           <p className="text-lg text-muted-foreground mb-8">
-            Join thousands of professionals who've revolutionized their workflow with AI-powered task management.
+            Join thousands of professionals who&apos;ve revolutionized their workflow with AI-powered task management.
           </p>
           
           <div className="flex flex-col sm:flex-row gap-4 justify-center">

@@ -60,7 +60,11 @@ export const emailAnalysisChain = async (emailContent: string): Promise<EmailAna
       temperature: 0.0,
     });
 
-    // 2. Define the Prompt
+    // Get current date for comparison
+    const currentDate = new Date();
+    const currentDateStr = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+
+    // 2. Define the Prompt with better instructions
     const promptTemplate = PromptTemplate.fromTemplate(`
       Analyze the following email content and extract any actionable tasks, interviews, or deadlines.
 
@@ -69,21 +73,34 @@ export const emailAnalysisChain = async (emailContent: string): Promise<EmailAna
       {email_content}
       ---
 
-      If the email is not actionable (e.g., spam, newsletter, notification), return "is_actionable" as false.
-      Otherwise, extract the tasks into the specified JSON format. Pay close attention to deadlines and context.
-      A "Physics Test Preparation" is an "assignment". A meeting confirmation for a job is an "interview".
+      Current Date: {current_date}
+
+      IMPORTANT INSTRUCTIONS:
+      1. If the email is not actionable (e.g., spam, newsletter, notification), return "is_actionable" as false.
+      2. ONLY extract tasks with deadlines that are TODAY or in the FUTURE. Do NOT create tasks for past dates.
+      3. Use priority scale: 1=Low, 2=Medium, 3=High, 4=Urgent
+      4. For interviews: Use company name and role if available
+      5. For assignments: Focus on the subject/topic
+      6. If no clear deadline is mentioned, you may set deadline to null
+      7. Skip any tasks that have already passed based on the current date
+
+      Examples:
+      - "Physics test tomorrow" → priority 4 (urgent, due soon)
+      - "Project due next week" → priority 3 (high, important deadline)
+      - "Meeting next month" → priority 2 (medium, future planning)
+      - "General reminder" → priority 1 (low, no urgency)
     `);
 
     // 3. Define the desired JSON output structure
     const extractionFunctionSchema: ExtractionFunctionSchema = {
       name: "email_task_extractor",
-      description: "Extracts tasks, deadlines, and interviews from an email.",
+      description: "Extracts tasks, deadlines, and interviews from an email, filtering out past due items.",
       parameters: {
         type: "object",
         properties: {
           is_actionable: {
             type: "boolean",
-            description: "Set to true if the email contains any actionable items, otherwise false.",
+            description: "Set to true if the email contains any actionable items with future or current deadlines, otherwise false.",
           },
           tasks: {
             type: "array",
@@ -91,8 +108,8 @@ export const emailAnalysisChain = async (emailContent: string): Promise<EmailAna
               type: "object",
               properties: {
                 title: { type: "string", description: "A concise title for the task." },
-                priority: { type: "number", description: "A priority score from 1 (Low) to 10 (Urgent)." },
-                deadline: { type: "string", description: "The deadline in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), or null if none." },
+                priority: { type: "number", description: "A priority score: 1 (Low), 2 (Medium), 3 (High), 4 (Urgent)." },
+                deadline: { type: "string", description: "The deadline in ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ), or null if none. Must be current date or future." },
                 task_type: { 
                   type: "string", 
                   enum: ["interview", "meeting", "assignment", "general"], 
@@ -125,17 +142,56 @@ export const emailAnalysisChain = async (emailContent: string): Promise<EmailAna
 
     // 5. Invoke the chain with the email content
     logger.info("Analyzing email with LangChain...");
-    const result = await chain.invoke({ email_content: emailContent });
+    const result = await chain.invoke({ 
+      email_content: emailContent,
+      current_date: currentDateStr
+    });
+    
+    // 6. Post-process to ensure data quality
+    const processedResult = result as EmailAnalysis;
+    
+    // Filter out any tasks with past deadlines (double-check)
+    if (processedResult.tasks) {
+      processedResult.tasks = processedResult.tasks.filter(task => {
+        if (!task.deadline) return true; // Keep tasks without deadlines
+        
+        const taskDeadline = new Date(task.deadline);
+        const isValidDate = !isNaN(taskDeadline.getTime());
+        const isFutureOrToday = taskDeadline >= new Date(currentDateStr);
+        
+        if (!isValidDate) {
+          logger.warn('Invalid deadline format detected', { deadline: task.deadline, title: task.title });
+          return false;
+        }
+        
+        if (!isFutureOrToday) {
+          logger.info('Filtering out past due task', { 
+            title: task.title, 
+            deadline: task.deadline,
+            currentDate: currentDateStr 
+          });
+          return false;
+        }
+        
+        // Ensure priority is within valid range (1-4)
+        if (task.priority < 1) task.priority = 1;
+        if (task.priority > 4) task.priority = 4;
+        
+        return true;
+      });
+      
+      // Update is_actionable based on filtered tasks
+      processedResult.is_actionable = processedResult.tasks.length > 0;
+    }
     
     logger.info('Email analysis completed', { 
-      isActionable: (result as Record<string, unknown>).is_actionable,
-      taskCount: (result as Record<string, unknown>).tasks?.length || 0
+      isActionable: processedResult.is_actionable,
+      taskCount: processedResult.tasks?.length || 0
     });
 
-    return result as EmailAnalysis;
+    return processedResult;
   } catch (error) {
     logger.error('Email analysis failed', error as Error, { emailContent: emailContent.substring(0, 100) });
     throw new Error('Failed to analyze email content');
   }
 };
-

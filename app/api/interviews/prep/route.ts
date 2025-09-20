@@ -60,27 +60,38 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
     });
 
     // 1. Find the original task to get company and role
-    const task = await prisma.task.findUnique({
-      where: { id: validatedData.taskId },
+    const task = await prisma.task.findFirst({
+      where: { 
+        id: validatedData.taskId,
+        userId: sessionUser.id // Ensure user owns the task
+      },
     });
 
     if (!task) {
-      throw new NotFoundError('Task not found');
+      throw new NotFoundError('Task not found or access denied');
     }
 
     if (task.taskType !== 'interview') {
       throw new ValidationError('Task is not an interview task');
     }
 
-    if (!task.company || !task.role) {
-      throw new ValidationError('Interview task is missing company or role information');
-    }
+    // 2. Extract company and role info, provide defaults if missing
+    const company = task.company || extractCompanyFromContent(task.title, task.details);
+    const role = task.role || extractRoleFromContent(task.title, task.details);
 
-    // 2. Generate questions using LangChain
-    let questions: Question[] | unknown = await generateInterviewQuestions(
-      task.company,
-      task.role,
-      validatedData.interviewType || 'technical'
+    logger.info('Generating interview questions', {
+      taskId: task.id,
+      company,
+      role,
+      hasCompany: !!task.company,
+      hasRole: !!task.role
+    });
+
+    // 3. Generate questions using available information
+    const questions: Question[] | unknown = await generateInterviewQuestions(
+      company,
+      role,
+      validatedData.interviewType || 'mixed'
     );
 
     // Defensive: normalize to an array (never return undefined)
@@ -95,7 +106,13 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
       });
     }
 
-    // 3. Save the questions to the Interview model (store as JSON)
+    // Ensure we have at least some questions
+    if (safeQuestions.length === 0) {
+      logger.warn('No questions generated, providing fallback questions');
+      safeQuestions.push(...getFallbackQuestions(role));
+    }
+
+    // 4. Save the questions to the Interview model (store as JSON)
     await prisma.interview.upsert({
       where: { taskId: validatedData.taskId },
       update: { 
@@ -132,4 +149,81 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
       { status: errorResponse.statusCode }
     );
   }
+}
+
+// Helper function to extract company name from content
+function extractCompanyFromContent(title: string, details: string): string {
+  const content = `${title} ${details}`.toLowerCase();
+  
+  // Common patterns to look for company names
+  const companyPatterns = [
+    /interview (?:at|with) ([a-zA-Z0-9\s]+?)(?:\s|$|\.)/,
+    /([a-zA-Z0-9\s]+?) interview/,
+    /position at ([a-zA-Z0-9\s]+?)(?:\s|$|\.)/,
+    /job at ([a-zA-Z0-9\s]+?)(?:\s|$|\.)/,
+    /work at ([a-zA-Z0-9\s]+?)(?:\s|$|\.)/
+  ];
+
+  for (const pattern of companyPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      const company = match[1].trim();
+      // Filter out common words that aren't company names
+      if (company.length > 2 && !['the', 'and', 'for', 'with'].includes(company)) {
+        return company.replace(/\b\w/g, l => l.toUpperCase()); // Title case
+      }
+    }
+  }
+
+  return 'the company'; // Generic fallback
+}
+
+// Helper function to extract role from content
+function extractRoleFromContent(title: string, details: string): string {
+  const content = `${title} ${details}`.toLowerCase();
+  
+  // Common role patterns
+  const rolePatterns = [
+    /(software engineer|developer|engineer|manager|analyst|designer|consultant|intern|associate|director|specialist)/,
+    /position.*?(?:as|for)\s+([a-zA-Z\s]+?)(?:\s|$|\.)/,
+    /role.*?(?:as|for)\s+([a-zA-Z\s]+?)(?:\s|$|\.)/,
+    /applying for ([a-zA-Z\s]+?)(?:\s|$|\.)/,
+    /interview for ([a-zA-Z\s]+?)(?:\s|$|\.)/
+  ];
+
+  for (const pattern of rolePatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      const role = match[1].trim();
+      if (role.length > 2) {
+        return role.replace(/\b\w/g, l => l.toUpperCase()); // Title case
+      }
+    }
+  }
+
+  return 'the position'; // Generic fallback
+}
+
+// Fallback questions when no questions are generated
+function getFallbackQuestions(role: string): Question[] {
+  const isGeneric = role.toLowerCase().includes('position') || role.toLowerCase().includes('role');
+  
+  return [
+    {
+      type: 'behavioral',
+      question: 'Tell me about a time when you had to overcome a significant challenge at work.'
+    },
+    {
+      type: 'company-specific',
+      question: `Why are you interested in ${isGeneric ? 'this position' : `working as a ${role}`}?`
+    },
+    {
+      type: 'behavioral',
+      question: 'Describe a situation where you had to work with a difficult team member.'
+    },
+    {
+      type: 'company-specific',
+      question: 'What are your greatest strengths and how do they relate to this role?'
+    }
+  ];
 }

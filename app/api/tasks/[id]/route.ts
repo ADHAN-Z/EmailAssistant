@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { prisma } from '@/lib/prisma';
+import { cache, cacheKeys } from '@/lib/cache';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import { logger } from '@/lib/logger';
 import { AuthenticationError, NotFoundError, ValidationError, handleApiError } from '@/lib/errors';
 import { taskUpdateSchema, type TaskUpdateInput } from '@/lib/validations';
-// import type { Task } from '@/types';
 
 interface RouteParams {
   params: Promise<{
@@ -20,12 +20,11 @@ interface TaskUpdateResponse {
 }
 
 export async function PATCH(
-  request: Request, 
+  request: Request,
   { params }: RouteParams
 ): Promise<NextResponse<TaskUpdateResponse>> {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session || !session.user?.id) {
       throw new AuthenticationError();
     }
@@ -42,10 +41,10 @@ export async function PATCH(
     const body = await request.json().catch(() => ({}));
     const validatedData: TaskUpdateInput = taskUpdateSchema.parse(body);
 
-    logger.info('Updating task', { 
-      taskId: id, 
-      userId: sessionUser.id, 
-      updates: validatedData 
+    logger.info('Updating task', {
+      taskId: id,
+      userId: sessionUser.id,
+      updates: validatedData
     });
 
     // Check if task exists and belongs to user
@@ -66,23 +65,29 @@ export async function PATCH(
       data: validatedData,
     });
 
-    logger.info('Task updated successfully', { 
-      taskId: id, 
-      userId: sessionUser.id 
+    // Invalidate user cache to force refresh
+    await cache.del(cacheKeys.userTasks(sessionUser.id));
+    
+    // Also clear any cached stats
+    const statsKey = `stats:user:${sessionUser.id}`;
+    await cache.del(statsKey);
+
+    logger.info('Task updated successfully', {
+      taskId: id,
+      userId: sessionUser.id
     });
 
     return NextResponse.json({
       success: true,
       data: updatedTask,
     });
-
   } catch (error) {
     const errorResponse = handleApiError(error);
-    logger.error('Failed to update task', error as Error, { 
+    logger.error('Failed to update task', error as Error, {
       taskId: (await params).id,
-      error: errorResponse.error 
+      error: errorResponse.error
     });
-    
+
     return NextResponse.json(
       { success: false, error: errorResponse.error },
       { status: errorResponse.statusCode }
@@ -96,7 +101,6 @@ export async function DELETE(
 ): Promise<NextResponse<{ success: boolean; error?: string }>> {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session || !session.user?.id) {
       throw new AuthenticationError();
     }
@@ -109,9 +113,9 @@ export async function DELETE(
       throw new ValidationError('Invalid task ID');
     }
 
-    logger.info('Deleting task', { 
-      taskId: id, 
-      userId: sessionUser.id 
+    logger.info('Deleting task', {
+      taskId: id,
+      userId: sessionUser.id
     });
 
     // Check if task exists and belongs to user
@@ -131,26 +135,31 @@ export async function DELETE(
       where: { id: id },
     });
 
-    logger.info('Task deleted successfully', { 
-      taskId: id, 
-      userId: sessionUser.id 
+    // Invalidate user cache to force refresh
+    await cache.del(cacheKeys.userTasks(sessionUser.id));
+    
+    // Also clear any cached stats
+    const statsKey = `stats:user:${sessionUser.id}`;
+    await cache.del(statsKey);
+
+    logger.info('Task deleted successfully', {
+      taskId: id,
+      userId: sessionUser.id
     });
 
     return NextResponse.json({
       success: true,
     });
-
   } catch (error) {
     const errorResponse = handleApiError(error);
-    logger.error('Failed to delete task', error as Error, { 
+    logger.error('Failed to delete task', error as Error, {
       taskId: (await params).id,
-      error: errorResponse.error 
+      error: errorResponse.error
     });
-    
+
     return NextResponse.json(
       { success: false, error: errorResponse.error },
       { status: errorResponse.statusCode }
     );
   }
 }
-
