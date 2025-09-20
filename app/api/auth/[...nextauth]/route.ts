@@ -77,15 +77,15 @@ export const authOptions: NextAuthOptions = {
       const customToken = token as GoogleJWT;
 
       if (account) {
-        logger.info("Account object received from Google", account);
         customToken.accessToken = account.access_token;
         customToken.refreshToken = account.refresh_token;
         customToken.accessTokenExpires = account.expires_at
           ? account.expires_at * 1000
           : Date.now() + 3600 * 1000;
-        logger.info("OAuth tokens persisted", {
-          provider: account.provider,
-          userId: token.sub,
+        
+        // Only log successful OAuth setup
+        logger.info("OAuth authentication completed", {
+          provider: account.provider
         });
       }
 
@@ -104,22 +104,21 @@ export const authOptions: NextAuthOptions = {
         session.accessToken = customToken.accessToken;
         session.refreshToken = customToken.refreshToken ?? "";
       }
-      logger.info("Session created", {
-        userId: token.sub,
-        email: session.user?.email,
-      });
+      // Remove routine session creation logs
       return session;
     },
 
     async signIn({ user, account }) {
       try {
-        logger.info("User sign in attempt", {
-          email: user.email,
-          provider: account?.provider,
-        });
+        // Only log authentication attempts in development or on failure
+        if (process.env.NODE_ENV === "development") {
+          logger.debug("Sign in attempt", {
+            provider: account?.provider,
+          });
+        }
         return true;
       } catch (error) {
-        logger.error("Sign in error", error as Error, { email: user.email });
+        logger.error("Sign in error", error as Error);
         return false;
       }
     },
@@ -130,17 +129,18 @@ export const authOptions: NextAuthOptions = {
   },
   events: {
     async signIn({ user, account, isNewUser }) {
-      logger.info("User signed in", {
-        email: user.email,
-        isNewUser,
-        provider: account?.provider,
-      });
+      // Only log significant events (new users or errors)
+      if (isNewUser) {
+        logger.info("New user registration", {
+          provider: account?.provider,
+        });
+      }
     },
-    async signOut({ session, token }) {
-      logger.info("User signed out", {
-        userId: token?.sub,
-        email: session?.user?.email,
-      });
+    async signOut({ token }) {
+      // Only log signout in development for debugging
+      if (process.env.NODE_ENV === "development") {
+        logger.debug("User signed out");
+      }
     },
   },
   secret: process.env.NEXTAUTH_SECRET,

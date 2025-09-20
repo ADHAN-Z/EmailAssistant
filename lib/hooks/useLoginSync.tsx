@@ -27,7 +27,6 @@ export function useLoginSync() {
           !currentStatus.isProcessing;
 
         if (shouldSync) {
-          console.log('Triggering auto-sync on login...');
           await syncManager.triggerSync();
         }
       };

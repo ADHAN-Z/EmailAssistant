@@ -39,7 +39,6 @@ async function getFreshTokens(userId: string): Promise<TokenInfo> {
     throw new Error('No valid tokens found for user');
   }
 
-  // Check if token is expired (with 5 minute buffer)
   const now = Date.now();
   const expiresAt = account.expires_at ? account.expires_at * 1000 : 0;
   const isExpired = now > (expiresAt - 5 * 60 * 1000);
@@ -50,13 +49,11 @@ async function getFreshTokens(userId: string): Promise<TokenInfo> {
     try {
       const refreshedTokens = await refreshAccessToken(account.refresh_token);
       
-      // Update database with new tokens
       await prisma.account.update({
         where: { id: account.id },
         data: {
           access_token: refreshedTokens.access_token,
           expires_at: Math.floor(refreshedTokens.expires_at / 1000),
-          // Only update refresh token if a new one was provided
           ...(refreshedTokens.refresh_token && { refresh_token: refreshedTokens.refresh_token })
         }
       });
@@ -105,7 +102,7 @@ async function refreshAccessToken(refreshToken: string) {
   return {
     access_token: data.access_token,
     expires_at: Date.now() + (data.expires_in * 1000),
-    refresh_token: data.refresh_token, // May be undefined if not rotating
+    refresh_token: data.refresh_token, // may be undefined if not rotating
   };
 }
 
@@ -119,10 +116,8 @@ export async function syncGmailEmails(
   const { maxEmails = 10, onlyUnread = true } = options;
 
   try {
-    // Get fresh tokens for the user
     const tokens = await getFreshTokens(userId);
 
-    // Set up OAuth2 client
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET
@@ -147,11 +142,8 @@ export async function syncGmailEmails(
     const messages = response.data.messages;
 
     if (!messages || messages.length === 0) {
-      logger.info('No new messages found', { userId });
       return [];
     }
-
-    logger.info(`Found ${messages.length} messages to process`, { userId });
 
     const emailPromises = messages.map(async (message) => {
       try {
@@ -186,9 +178,7 @@ export async function syncGmailEmails(
       }
     });
 
-    const emails = await Promise.all(emailPromises);
-    logger.info(`Successfully processed ${emails.length} emails`, { userId });
-    return emails;
+    return await Promise.all(emailPromises);
 
   } catch (error) {
     logger.error('Error fetching emails from Gmail', error as Error, { userId });

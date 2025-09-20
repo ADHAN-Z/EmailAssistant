@@ -73,7 +73,6 @@ export class SyncManager {
   // Trigger sync (can be called on login or manually)
   async triggerSync(): Promise<boolean> {
     if (this.status.isProcessing) {
-      console.log('Sync already in progress');
       return false;
     }
 

@@ -54,11 +54,6 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
 
     const sessionUser = session.user as SessionUser;
 
-    logger.info('Starting interview prep generation', { 
-      taskId: validatedData.taskId, 
-      userId: sessionUser.id 
-    });
-
     // 1. Find the original task to get company and role
     const task = await prisma.task.findFirst({
       where: { 
@@ -79,14 +74,6 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
     const company = task.company || extractCompanyFromContent(task.title, task.details);
     const role = task.role || extractRoleFromContent(task.title, task.details);
 
-    logger.info('Generating interview questions', {
-      taskId: task.id,
-      company,
-      role,
-      hasCompany: !!task.company,
-      hasRole: !!task.role
-    });
-
     // 3. Generate questions using available information
     const questions: Question[] | unknown = await generateInterviewQuestions(
       company,
@@ -100,7 +87,7 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
       : [];
 
     if (!Array.isArray(questions)) {
-      logger.warn('generateInterviewQuestions returned non-array, normalizing to empty array', {
+      logger.warn('Interview question generator returned unexpected format', {
         taskId: validatedData.taskId,
         returnedType: typeof questions,
       });
@@ -108,7 +95,6 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
 
     // Ensure we have at least some questions
     if (safeQuestions.length === 0) {
-      logger.warn('No questions generated, providing fallback questions');
       safeQuestions.push(...getFallbackQuestions(role));
     }
 
@@ -127,9 +113,7 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
       },
     });
 
-    logger.info('Interview prep generated successfully', { 
-      taskId: validatedData.taskId, 
-      userId: sessionUser.id,
+    logger.info('Interview questions generated', { 
       questionCount: safeQuestions.length 
     });
 
@@ -140,9 +124,7 @@ export async function POST(request: Request): Promise<NextResponse<InterviewPrep
 
   } catch (error: unknown) {
     const errorResponse = handleApiError(error);
-    logger.error('Failed to generate interview prep', error instanceof Error ? error : new Error('Unknown error'), { 
-      error: errorResponse.error 
-    });
+    logger.error('Failed to generate interview prep', error instanceof Error ? error : new Error('Unknown error'));
     
     return NextResponse.json(
       { success: false, error: errorResponse.error },

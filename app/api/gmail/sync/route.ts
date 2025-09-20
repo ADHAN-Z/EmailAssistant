@@ -1,4 +1,4 @@
-// app/api/gmail/sync/route.ts - Enhanced with progress tracking
+// app/api/gmail/sync/route.ts - Cleaned for production
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
@@ -76,7 +76,10 @@ async function updateSyncStatus(userId: string, updates: Partial<SyncStatus>) {
   // Cache for 5 minutes
   await cache.set(syncStatusKey, updatedStatus, 300);
   
-  logger.info('Sync status updated', { userId, status: updatedStatus });
+  // Only log important status changes
+  if (process.env.NODE_ENV === 'development') {
+    logger.debug('Sync status updated', { userId, progress: updatedStatus.progress });
+  }
 }
 
 export async function POST(request: Request): Promise<NextResponse<EmailSyncResponse>> {
@@ -113,9 +116,7 @@ export async function POST(request: Request): Promise<NextResponse<EmailSyncResp
     const sessionUser = session.user as SessionUser;
     userId = sessionUser.id;
 
-    logger.info("Starting email sync", {
-      userId: sessionUser.id,
-      email: sessionUser.email,
+    logger.info("Email sync initiated", {
       maxEmails: validatedData.maxEmails,
     });
 
@@ -171,9 +172,7 @@ export async function POST(request: Request): Promise<NextResponse<EmailSyncResp
     }
 
     const errorResponse = handleApiError(error);
-    logger.error("Email sync failed", error instanceof Error ? error : new Error("Unknown error"), {
-      error: errorResponse.error,
-    });
+    logger.error("Email sync failed", error instanceof Error ? error : new Error("Unknown error"));
 
     return NextResponse.json({ 
       success: false, 
@@ -202,7 +201,6 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
     });
 
     if (emails.length === 0) {
-      logger.info("No new emails to process", { userId });
       await updateSyncStatus(userId, {
         isProcessing: false,
         progress: 100,
@@ -211,8 +209,6 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
       });
       return;
     }
-
-    logger.info(`Processing ${emails.length} emails`, { userId });
 
     await updateSyncStatus(userId, {
       progress: 20,
@@ -237,9 +233,9 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
             const existingTask = await prisma.task.findFirst({
               where: {
                 userId,
-                // Use email subject + date as unique identifier
-                title: {
-                  contains: email.id?.substring(0, 50) || 'Untitled'
+                // Use email ID for duplicate checking
+                details: {
+                  contains: email.id?.substring(0, 20) || 'unknown'
                 },
                 createdAt: {
                   gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Within last 7 days
@@ -248,10 +244,12 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
             });
 
             if (existingTask) {
-              logger.info('Email already processed, skipping', { 
-                emailId: email.id, 
-                subject: email.id
-              });
+              // Only log in development
+              if (process.env.NODE_ENV === 'development') {
+                logger.debug('Email already processed, skipping', { 
+                  emailId: email.id?.substring(0, 8) 
+                });
+              }
               return [];
             }
 
@@ -272,17 +270,12 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
                   // Only use deadline if it's valid and in the future
                   if (!isNaN(deadlineDate.getTime()) && deadlineDate >= currentDate) {
                     validDeadline = deadlineDate;
-                  } else {
-                    logger.info('Invalid or past deadline detected, setting to null', {
-                      originalDeadline: task.deadline,
-                      taskTitle: task.title
-                    });
                   }
                 }
 
                 tasksForEmail.push({
                   title: task.title,
-                  priority: mappedPriority, // Now properly mapped to 1-4 scale
+                  priority: mappedPriority,
                   deadline: validDeadline,
                   taskType: task.task_type,
                   company: task.company || undefined,
@@ -297,10 +290,7 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
             }
             return [];
           } catch (error) {
-            logger.error(`Failed to process email ${email.id}`, error as Error, {
-              userId,
-              emailId: email.id,
-            });
+            logger.error(`Failed to process email`, error as Error);
             throw error;
           }
         })
@@ -348,7 +338,7 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
         });
         totalTasksCreated = allTasksToCreate.length;
       } catch (dbError) {
-        logger.error('Failed to save tasks to database', dbError as Error, { userId });
+        logger.error('Failed to save tasks to database', dbError as Error);
         throw dbError;
       }
     }
@@ -367,7 +357,6 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
     });
 
     logger.info("Email sync completed", {
-      userId,
       totalEmails: emails.length,
       processedEmails,
       failedEmails,
@@ -375,9 +364,7 @@ async function processEmailsAsync(sessionUser: SessionUser, validatedData: Email
     });
 
   } catch (error: unknown) {
-    logger.error("Async email processing failed", error instanceof Error ? error : new Error("Unknown error"), {
-      userId,
-    });
+    logger.error("Email processing failed", error instanceof Error ? error : new Error("Unknown error"));
     
     await updateSyncStatus(userId, {
       isProcessing: false,

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
     const userId = (session.user as SessionUser).id;
 
-    // Try to get tasks from cache first (same logic as your dashboard)
+    // Try to get tasks from cache first
     let tasks = await cache.get<Task[]>(cacheKeys.userTasks(userId));
 
     if (!tasks) {
@@ -27,23 +27,19 @@ export async function GET(request: NextRequest) {
       // Fetch tasks from database with proper sorting and filtering
       tasks = await prisma.task.findMany({
         where: {
-          userId: userId,
-          // Only show tasks that are not overdue
+          userId,
           OR: [
-            { deadline: null }, // Tasks without deadlines
-            { deadline: { gte: new Date() } }, // Tasks with future deadlines
+            { deadline: null },
+            { deadline: { gte: new Date() } },
           ]
         },
         orderBy: [
-          { priority: 'desc' }, // Primary sort: 4=Urgent, 3=High, 2=Medium, 1=Low
-          { createdAt: 'desc' }  // Secondary sort: newest first
+          { priority: 'desc' },
+          { createdAt: 'desc' }
         ],
       });
 
-      // Cache the results
       await cache.set(cacheKeys.userTasks(userId), tasks, CACHE_TTL.MEDIUM);
-    } else {
-      logger.info('Cache hit for user tasks', { userId });
     }
 
     return NextResponse.json({
@@ -53,7 +49,6 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    // Get userId safely for logging
     let userId: string | undefined;
     try {
       const session = await getServerSession(authOptions);
