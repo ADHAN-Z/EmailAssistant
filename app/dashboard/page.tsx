@@ -1,7 +1,7 @@
 // app/dashboard/page.tsx
 import { DashboardContent } from "@/components/dashboard/DashboardContent";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";
 import { authOptions } from "../api/auth/[...nextauth]/route";
 import { logger } from '@/lib/logger';
 import type { SessionUser } from '@/types';
