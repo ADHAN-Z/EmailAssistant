@@ -8,7 +8,7 @@ import { logger } from '@/lib/logger';
 import type { SessionUser } from '@/types';
 import type { Task } from '@prisma/client';
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
 

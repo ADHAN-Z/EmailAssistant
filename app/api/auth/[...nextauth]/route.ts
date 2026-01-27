@@ -108,7 +108,7 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    async signIn({ user, account }) {
+    async signIn({ account }) {
       try {
         // Only log authentication attempts in development or on failure
         if (process.env.NODE_ENV === "development") {
@@ -128,7 +128,7 @@ export const authOptions: NextAuthOptions = {
     error: "/auth/error",
   },
   events: {
-    async signIn({ user, account, isNewUser }) {
+    async signIn({ account, isNewUser }) {
       // Only log significant events (new users or errors)
       if (isNewUser) {
         logger.info("New user registration", {
@@ -136,7 +136,7 @@ export const authOptions: NextAuthOptions = {
         });
       }
     },
-    async signOut({ token }) {
+    async signOut({ }) {
       // Only log signout in development for debugging
       if (process.env.NODE_ENV === "development") {
         logger.debug("User signed out");
