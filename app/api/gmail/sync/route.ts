@@ -12,7 +12,6 @@ import { checkRateLimit, emailSyncLimiter, getClientIP } from "@/lib/rate-limit"
 import type { SessionUser } from "@/types";
 import { RetryHandler } from "@/lib/retry-handler";
 import { PerformanceMonitor } from "@/lib/performance-monitor";
-import { EmailCache } from "@/lib/email-cache";
 import { cache, cacheKeys } from "@/lib/cache";
 
 interface TaskCreateData {
@@ -142,10 +141,10 @@ export async function POST(request: Request): Promise<NextResponse<EmailSyncResp
           { emailId: email.id }
         );
 
-        const typedResult = result as any;
-        if (typedResult.success && typedResult.analysis && typedResult.analysis.is_actionable) {
+        // Type guard to check if the result has analysis
+        if (result.success && 'analysis' in result && result.analysis && result.analysis.is_actionable) {
           processedEmails++;
-          for (const task of typedResult.analysis.tasks) {
+          for (const task of result.analysis.tasks) {
             allTasksToCreate.push({
               title: task.title,
               priority: task.priority,
@@ -161,10 +160,13 @@ export async function POST(request: Request): Promise<NextResponse<EmailSyncResp
           }
         } else {
           failedEmails++;
-          logger.error(`Failed to process email ${email.id}`, typedResult.error as Error, {
-            userId: sessionUser.id,
-            emailId: email.id,
-          });
+          // Type guard to check if the result has error
+          if ('error' in result) {
+            logger.error(`Failed to process email ${email.id}`, result.error as Error, {
+              userId: sessionUser.id,
+              emailId: email.id,
+            });
+          }
         }
       } catch (error) {
         failedEmails++;

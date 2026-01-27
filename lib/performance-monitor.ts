@@ -2,7 +2,7 @@
 import { logger } from '@/lib/logger';
 
 export interface PerformanceMetadata {
-  [key: string]: any;
+  [key: string]: string | number | boolean | object;
 }
 
 export class PerformanceMonitor {
