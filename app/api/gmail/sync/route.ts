@@ -1,4 +1,4 @@
-// app/api/gmail/sync/route.ts - Cleaned for production
+// app/api/gmail/sync/route.ts - Updated to use userId instead of accessToken
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
@@ -6,19 +6,22 @@ import { syncGmailEmails, type GmailMessage } from "@/lib/gmail";
 import { emailAnalysisChain } from "@/lib/langchain/emailProcessor";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
-import { cache } from "@/lib/cache";
 import { AuthenticationError, handleApiError } from "@/lib/errors";
 import { emailSyncSchema, type EmailSyncInput } from "@/lib/validations";
 import { checkRateLimit, emailSyncLimiter, getClientIP } from "@/lib/rate-limit";
 import type { SessionUser } from "@/types";
+import { RetryHandler } from "@/lib/retry-handler";
+import { PerformanceMonitor } from "@/lib/performance-monitor";
+import { EmailCache } from "@/lib/email-cache";
+import { cache, cacheKeys } from "@/lib/cache";
 
 interface TaskCreateData {
   title: string;
   priority: number;
   deadline: Date | null;
   taskType: string;
-  company?: string | undefined;
-  role?: string | undefined;
+  company?: string;
+  role?: string;
   details: string;
   links: string[];
   status: string;
@@ -32,59 +35,11 @@ interface EmailSyncResponse {
     emailsProcessed: number;
     emailsFailed: number;
     tasksCreated: number;
-    status?: string;
   };
   error?: string;
 }
 
-interface SyncStatus {
-  isProcessing: boolean;
-  progress: number;
-  currentStep: string;
-  totalEmails: number;
-  processedEmails: number;
-  tasksCreated: number;
-  emailsFailed: number;
-  lastSync: Date | null;
-  error: string | null;
-}
-
-// Helper function to update sync status in cache
-async function updateSyncStatus(userId: string, updates: Partial<SyncStatus>) {
-  const syncStatusKey = `sync:status:${userId}`;
-  
-  // Get current status
-  const currentStatus = await cache.get<SyncStatus>(syncStatusKey) || {
-    isProcessing: false,
-    progress: 0,
-    currentStep: '',
-    totalEmails: 0,
-    processedEmails: 0,
-    tasksCreated: 0,
-    emailsFailed: 0,
-    lastSync: null,
-    error: null,
-  };
-  
-  // Update with new values
-  const updatedStatus: SyncStatus = {
-    ...currentStatus,
-    ...updates,
-    lastSync: updates.isProcessing === false ? new Date() : currentStatus.lastSync,
-  };
-
-  // Cache for 5 minutes
-  await cache.set(syncStatusKey, updatedStatus, 300);
-  
-  // Only log important status changes
-  if (process.env.NODE_ENV === 'development') {
-    logger.debug('Sync status updated', { userId, progress: updatedStatus.progress });
-  }
-}
-
 export async function POST(request: Request): Promise<NextResponse<EmailSyncResponse>> {
-  let userId: string | undefined;
-  
   try {
     const session = await getServerSession(authOptions);
 
@@ -114,262 +69,175 @@ export async function POST(request: Request): Promise<NextResponse<EmailSyncResp
     const validatedData: EmailSyncInput = emailSyncSchema.parse(body);
 
     const sessionUser = session.user as SessionUser;
-    userId = sessionUser.id;
+    const syncStatusKey = `sync:status:${sessionUser.id}`;
 
-    logger.info("Email sync initiated", {
-      maxEmails: validatedData.maxEmails,
-    });
-
-    // Check if sync is already in progress
-    const currentStatus = await cache.get<SyncStatus>(`sync:status:${userId}`);
-    if (currentStatus?.isProcessing) {
-      return NextResponse.json({
-        success: false,
-        error: "Sync already in progress",
-        data: { 
-          emailsProcessed: 0,
-          emailsFailed: 0,
-          tasksCreated: 0,
-          status: 'already_processing' 
-        }
-      }, { status: 409 });
-    }
-
-    // Set initial processing status
-    await updateSyncStatus(userId, {
+    // Initialize sync status in cache
+    await cache.set(syncStatusKey, {
       isProcessing: true,
       progress: 0,
-      currentStep: 'Connecting to Gmail...',
+      currentStep: 'Starting sync...',
       totalEmails: 0,
       processedEmails: 0,
       tasksCreated: 0,
       emailsFailed: 0,
+      lastSync: null,
       error: null,
     });
 
-    // Start async processing (don't await - let it run in background)
-    processEmailsAsync(sessionUser, validatedData);
-
-    // Return immediately with processing status
-    return NextResponse.json({
-      success: true,
-      message: 'Email sync started successfully',
-      data: {
-        emailsProcessed: 0,
-        emailsFailed: 0,
-        tasksCreated: 0,
-        status: 'processing'
-      }
-    });
-
-  } catch (error: unknown) {
-    // Update error status if we have userId
-    if (userId) {
-      await updateSyncStatus(userId, {
-        isProcessing: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-
-    const errorResponse = handleApiError(error);
-    logger.error("Email sync failed", error instanceof Error ? error : new Error("Unknown error"));
-
-    return NextResponse.json({ 
-      success: false, 
-      error: errorResponse.error 
-    }, { 
-      status: errorResponse.statusCode 
-    });
-  }
-}
-
-// Async processing function that handles the actual email sync
-async function processEmailsAsync(sessionUser: SessionUser, validatedData: EmailSyncInput) {
-  const userId = sessionUser.id;
-  
-  try {
-    // Update status: Fetching emails
-    await updateSyncStatus(userId, {
-      progress: 10,
-      currentStep: 'Fetching recent emails...',
+    logger.info("Starting email sync", {
+      userId: sessionUser.id,
+      email: sessionUser.email,
+      maxEmails: validatedData.maxEmails,
     });
 
     // 1️⃣ Fetch emails using userId (tokens will be handled internally)
-    const emails: GmailMessage[] = await syncGmailEmails(userId, {
+    const emails: GmailMessage[] = await syncGmailEmails(sessionUser.id, {
       maxEmails: validatedData.maxEmails,
       onlyUnread: validatedData.onlyUnread
     });
 
     if (emails.length === 0) {
-      await updateSyncStatus(userId, {
-        isProcessing: false,
-        progress: 100,
-        currentStep: 'No new emails found',
-        totalEmails: 0,
-      });
-      return;
+      logger.info("No new emails to process", { userId: sessionUser.id });
+      return NextResponse.json({ success: true, message: "No new emails to process." });
     }
 
-    await updateSyncStatus(userId, {
-      progress: 20,
-      currentStep: 'Analyzing emails with AI...',
-      totalEmails: emails.length,
-    });
+    logger.info(`Processing ${emails.length} emails`, { userId: sessionUser.id });
 
+    // 2️⃣ Process each email and update progress
     const allTasksToCreate: TaskCreateData[] = [];
     let processedEmails = 0;
     let failedEmails = 0;
 
-    // 2️⃣ Process emails in batches for better progress tracking
-    const batchSize = 3; // Process 3 emails at a time
-    for (let i = 0; i < emails.length; i += batchSize) {
-      const batch = emails.slice(i, i + batchSize);
+    for (let i = 0; i < emails.length; i++) {
+      const email = emails[i];
       
-      // Process batch concurrently
-      const batchResults = await Promise.allSettled(
-        batch.map(async (email) => {
-          try {
-            // Check if this email was already processed
-            const existingTask = await prisma.task.findFirst({
-              where: {
-                userId,
-                // Use email ID for duplicate checking
-                details: {
-                  contains: email.id?.substring(0, 20) || 'unknown'
-                },
-                createdAt: {
-                  gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Within last 7 days
-                }
-              }
-            });
+      // Update progress
+      const progress = Math.round(((i + 1) / emails.length) * 100);
+      await cache.set(syncStatusKey, {
+        isProcessing: true,
+        progress,
+        currentStep: `Processing email ${i + 1} of ${emails.length}`,
+        totalEmails: emails.length,
+        processedEmails: i,
+        tasksCreated: allTasksToCreate.length,
+        emailsFailed: failedEmails,
+        lastSync: null,
+        error: null,
+      });
 
-            if (existingTask) {
-              // Only log in development
-              if (process.env.NODE_ENV === 'development') {
-                logger.debug('Email already processed, skipping', { 
-                  emailId: email.id?.substring(0, 8) 
-                });
-              }
-              return [];
+      try {
+        const result = await PerformanceMonitor.measure(
+          'email-analysis',
+          async () => {
+            try {
+              return await RetryHandler.retry(async () => {
+                const analysis = await emailAnalysisChain(email.content);
+                return { email, analysis, success: true };
+              });
+            } catch (error) {
+              logger.error('Email analysis failed', error as Error, { emailId: email.id });
+              return { email, error, success: false };
             }
+          },
+          { emailId: email.id }
+        );
 
-            const analysis = await emailAnalysisChain(email.content);
-
-            if (analysis && analysis.is_actionable) {
-              const tasksForEmail: TaskCreateData[] = [];
-              for (const task of analysis.tasks) {
-                // Ensure priority is mapped correctly (1-4 scale)
-                const mappedPriority = Math.max(1, Math.min(4, task.priority));
-                
-                // Additional validation for deadline
-                let validDeadline: Date | null = null;
-                if (task.deadline) {
-                  const deadlineDate = new Date(task.deadline);
-                  const currentDate = new Date();
-                  
-                  // Only use deadline if it's valid and in the future
-                  if (!isNaN(deadlineDate.getTime()) && deadlineDate >= currentDate) {
-                    validDeadline = deadlineDate;
-                  }
-                }
-
-                tasksForEmail.push({
-                  title: task.title,
-                  priority: mappedPriority,
-                  deadline: validDeadline,
-                  taskType: task.task_type,
-                  company: task.company || undefined,
-                  role: task.role || undefined,
-                  details: task.details,
-                  links: task.links || [],
-                  status: "todo",
-                  userId,
-                });
-              }
-              return tasksForEmail;
-            }
-            return [];
-          } catch (error) {
-            logger.error(`Failed to process email`, error as Error);
-            throw error;
-          }
-        })
-      );
-
-      // Process batch results
-      batchResults.forEach((result, batchIndex) => {
-        if (result.status === 'fulfilled') {
-          allTasksToCreate.push(...result.value);
+        const typedResult = result as any;
+        if (typedResult.success && typedResult.analysis && typedResult.analysis.is_actionable) {
           processedEmails++;
+          for (const task of typedResult.analysis.tasks) {
+            allTasksToCreate.push({
+              title: task.title,
+              priority: task.priority,
+              deadline: task.deadline ? new Date(task.deadline) : null,
+              taskType: task.task_type,
+              company: task.company,
+              role: task.role,
+              details: task.details,
+              links: task.links || [],
+              status: "todo",
+              userId: sessionUser.id,
+            });
+          }
         } else {
           failedEmails++;
+          logger.error(`Failed to process email ${email.id}`, typedResult.error as Error, {
+            userId: sessionUser.id,
+            emailId: email.id,
+          });
         }
-      });
-
-      // Update progress (20% to 80% for email processing)
-      const emailProgress = ((processedEmails + failedEmails) / emails.length) * 60;
-      const totalProgress = Math.min(20 + emailProgress, 80);
-      
-      await updateSyncStatus(userId, {
-        progress: totalProgress,
-        currentStep: `Analyzing emails... ${processedEmails + failedEmails}/${emails.length}`,
-        processedEmails: processedEmails,
-        emailsFailed: failedEmails,
-      });
-
-      // Small delay to prevent overwhelming the system
-      if (i + batchSize < emails.length) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-    }
-
-    // 3️⃣ Save tasks to DB
-    await updateSyncStatus(userId, {
-      progress: 85,
-      currentStep: 'Saving tasks to database...',
-    });
-
-    let totalTasksCreated = 0;
-    if (allTasksToCreate.length > 0) {
-      try {
-        await prisma.task.createMany({
-          data: allTasksToCreate,
-          skipDuplicates: true,
+      } catch (error) {
+        failedEmails++;
+        logger.error('Email processing failed', error as Error, {
+          userId: sessionUser.id,
+          emailId: email.id,
         });
-        totalTasksCreated = allTasksToCreate.length;
-      } catch (dbError) {
-        logger.error('Failed to save tasks to database', dbError as Error);
-        throw dbError;
       }
     }
 
-    // Clear user cache to force refresh
-    await cache.clearUserCache?.(userId);
+    // 3️⃣ Deduplicate tasks before saving
+    const deduplicatedTasks = [];
+    const seenTasks = new Set();
 
-    // Final status update
-    await updateSyncStatus(userId, {
+    for (const task of allTasksToCreate) {
+      // Create a unique key based on title, company, and role (for interviews)
+      const taskKey = `${task.title.toLowerCase()}${task.company || ''}${task.role || ''}`;
+      
+      if (!seenTasks.has(taskKey)) {
+        seenTasks.add(taskKey);
+        deduplicatedTasks.push(task);
+      }
+    }
+
+    // 4️⃣ Save tasks to DB
+    let totalTasksCreated = 0;
+    if (deduplicatedTasks.length > 0) {
+      await prisma.task.createMany({
+        data: deduplicatedTasks,
+        skipDuplicates: true,
+      });
+      totalTasksCreated = deduplicatedTasks.length;
+      
+      // Clear user's tasks cache to ensure fresh data is fetched
+      await cache.del(cacheKeys.userTasks(sessionUser.id));
+    }
+
+    // Update sync status in cache with final results
+    await cache.set(syncStatusKey, {
       isProcessing: false,
       progress: 100,
-      currentStep: 'Sync completed successfully!',
-      processedEmails: processedEmails,
-      emailsFailed: failedEmails,
+      currentStep: 'Sync complete',
+      totalEmails: emails.length,
+      processedEmails,
       tasksCreated: totalTasksCreated,
+      emailsFailed: failedEmails,
+      lastSync: new Date(),
+      error: null,
     });
 
     logger.info("Email sync completed", {
+      userId: sessionUser.id,
       totalEmails: emails.length,
       processedEmails,
       failedEmails,
       tasksCreated: totalTasksCreated,
     });
 
-  } catch (error: unknown) {
-    logger.error("Email processing failed", error instanceof Error ? error : new Error("Unknown error"));
-    
-    await updateSyncStatus(userId, {
-      isProcessing: false,
-      error: error instanceof Error ? error.message : 'Processing failed',
-      currentStep: 'Sync failed',
+    return NextResponse.json({
+      success: true,
+      message: `Sync complete. Processed ${processedEmails} emails, created ${totalTasksCreated} new tasks.`,
+      data: {
+        emailsProcessed: processedEmails,
+        emailsFailed: failedEmails,
+        tasksCreated: totalTasksCreated,
+      },
     });
+  } catch (error: unknown) {
+    const errorResponse = handleApiError(error);
+    logger.error("Email sync failed", error instanceof Error ? error : new Error("Unknown error"), {
+      error: errorResponse.error,
+    });
+
+    return NextResponse.json({ success: false, error: errorResponse.error }, { status: errorResponse.statusCode });
   }
 }
