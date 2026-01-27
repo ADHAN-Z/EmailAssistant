@@ -6,7 +6,6 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  directUrl  = env("DIRECT_URL")
 }
 
 model User {
@@ -37,6 +36,14 @@ model Task {
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
+  
+  @@index([userId])
+  @@index([deadline])
+  @@index([status])
+  @@index([priority])
+  @@index([userId, status])
+  @@index([userId, priority])
+  @@index([userId, deadline])
 }
 
 model Interview {
