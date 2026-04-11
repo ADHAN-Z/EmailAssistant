@@ -47,7 +47,7 @@ export const generateInterviewQuestions = async (
 
     const llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: "gpt-4o",
+      modelName: "gpt-4o-mini",
       temperature: 0.5,
     });
 

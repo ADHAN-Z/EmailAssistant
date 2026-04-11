@@ -49,7 +49,7 @@ export const emailAnalysisChain = async (emailContent: string): Promise<EmailAna
     // 1. Define the LLM
     const llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: "gpt-4o",
+      modelName: "gpt-4o-mini",
       temperature: 0.0,
     });
 
