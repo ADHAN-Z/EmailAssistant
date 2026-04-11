@@ -1,0 +1,21 @@
+[
+  {
+    "id": "sample-001",
+    "emailContent": "Subject: Interview Invitation\n\nHi Alex,\n\nYou are invited for a backend interview on 2026-05-20 at 10:00 AM. Please review system design basics before the call.\n\nThanks,\nRecruiter",
+    "expected": {
+      "isActionable": true,
+      "taskTitles": [
+        "Prepare for backend interview",
+        "Review system design basics"
+      ]
+    }
+  },
+  {
+    "id": "sample-002",
+    "emailContent": "Subject: Weekly Newsletter\n\nTop product updates this week. No action needed.",
+    "expected": {
+      "isActionable": false,
+      "taskTitles": []
+    }
+  }
+]
