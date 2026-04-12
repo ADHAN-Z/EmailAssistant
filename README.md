@@ -37,7 +37,7 @@ A Next.js application that intelligently extracts actionable tasks from your Gma
 1. **Clone the repository**
    ```bash
    git clone https://github.com/ADHAN-Z/EmailAssistant.git
-   cd email-assistant
+   cd EmailAssistant
    ```
 
 2. **Install dependencies**
@@ -102,7 +102,7 @@ A Next.js application that intelligently extracts actionable tasks from your Gma
 ## 📁 Project Structure
 
 ```
-email-assistant/
+EmailAssistant/
 ├── app/                          # Next.js app directory
 │   ├── api/                      # API routes
 │   │   ├── auth/                 # NextAuth configuration
@@ -140,7 +140,7 @@ email-assistant/
 
 1. **Build the Docker image**
    ```bash
-   docker build -t email-assistant .
+   docker build -t EmailAssistant .
    ```
 
 2. **Run with Docker Compose**
